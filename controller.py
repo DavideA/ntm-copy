@@ -29,7 +29,7 @@ class Controller(object):
 
         with tf.variable_scope('k_t_emitter'):
             X = tf.expand_dims(X, axis=0)
-            k_t = tf.layers.dense(X, self.memory_vector_size, activation=tf.nn.tanh)
+            k_t = tf.layers.dense(X, self.memory_vector_size, activation=tf.nn.sigmoid)
             k_t = tf.squeeze(k_t, axis=0)
 
         return k_t

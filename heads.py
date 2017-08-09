@@ -46,13 +46,13 @@ class Head(object):
 
         with tf.variable_scope('content_addressing'):
             # compute norm of key and memory content
-            k_t_norm = tf.sqrt(tf.reduce_sum(tf.pow(self._k_t, 2)))
+            k_t_norm = 1#tf.sqrt(tf.reduce_sum(tf.pow(self._k_t, 2)))
             M_norm = tf.sqrt(tf.reduce_sum(tf.pow(M, 2), axis=1))
 
             # compute cosine similarity for each memory entry (Eq. (6))
             dot_product = tf.matmul(tf.expand_dims(self._k_t, axis=0), M, transpose_b=True)
             dot_product = tf.squeeze(dot_product, axis=0)
-            cosine_similarity = dot_product# / (k_t_norm * M_norm + np.finfo(float).eps)
+            cosine_similarity = dot_product / (k_t_norm * M_norm + np.finfo(float).eps)
 
             # compute final weights (Eq. (5))
             wc_t = tf.nn.softmax(self._beta_t * cosine_similarity)
@@ -93,7 +93,7 @@ class Head(object):
         return w_t
 
     def _update_w_last(self, w_t):
-        tf.assign(self._w_last, w_t)
+        self._w_last = tf.assign(self._w_last, w_t)
 
     @staticmethod
     def _circular_convolution(v, k):
@@ -126,8 +126,8 @@ class Head(object):
         return tf.dynamic_stitch([i for i in xrange(size)], kernels)
 
     def reset(self):
-        tf.assign(self._w_last,
-                  tf.ones(shape=(self._memory_capacity,), dtype=tf.float32) / self._memory_capacity)
+        self._w_last = tf.assign(self._w_last,
+                                 tf.ones(shape=(self._memory_capacity,), dtype=tf.float32) / self._memory_capacity)
 
 
 class ReadHead(Head):
@@ -151,7 +151,7 @@ class WriteHead(Head):
     def __init__(self, memory_capacity, memory_vector_size):
         super(WriteHead, self).__init__(memory_capacity, memory_vector_size)
 
-    def write(self, M, w_t, e_t, a_t):
+    def produce_memory_update(self, M, w_t, e_t, a_t):
 
         self._update_w_last(w_t)
 
@@ -160,7 +160,9 @@ class WriteHead(Head):
 
         w_t = tf.expand_dims(w_t, axis=1)
         a_t = tf.tile(tf.expand_dims(a_t, axis=0), (self._memory_capacity, 1))
-        tf.assign(M, M_tilde_t + (w_t * a_t))
+        memory_update = M_tilde_t + (w_t * a_t)
+
+        return memory_update
 
     def produce_erase_vector(self, X):
 
