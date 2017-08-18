@@ -9,10 +9,43 @@ from utils import print_progress
 
 
 class NTM(object):
+    """
+    Models a naive implementation of a Neural Turing Machine.
+    The implementation is the simplest you could write reading the original paper [1].
+    Features:
+        * a feed-forward 2-layer controller.
+        * a single read head and a single write head.
+    """
 
     def __init__(self, memory_capacity, memory_vector_size, input_vector_size, sequence_length,
                  controller_out_dim, controller_hidden_dim, learning_rate,
-                 min_grad, max_grad):
+                 min_grad, max_grad, logdir):
+        """ 
+        Builds a Neural Turing Machine model.
+        
+        Parameters
+        ----------
+        memory_capacity: int
+            the number of memory cells.
+        memory_vector_size: int
+            the dimensionality of each memory cell.
+        input_vector_size: int
+            the dimensionality of input vectors.
+        sequence_length: int
+            the length of the sequence to copy.
+        controller_out_dim: int
+            the dimensionality of the feature vector provided by the controller.
+        controller_hidden_dim: int
+            the dimensionality of the hidden layer of the controller.
+        learning_rate: float
+            the optimizer learning rate.
+        min_grad: float
+            the minimum value of the gradient for clipping.
+        max_grad: float
+            the maximum value of the gradient for clipping.
+        logdir: str
+            the directory where to store logs.
+        """
 
         self.memory_capacity = memory_capacity
         self.memory_vector_size = memory_vector_size
@@ -23,8 +56,9 @@ class NTM(object):
         self.learning_rate = learning_rate
         self.min_grad = min_grad
         self.max_grad = max_grad
+        self.logdir = logdir
 
-        # controller and heads
+        # build controller and heads
         self.controller = Controller(output_dim=self.controller_out_dim, hidden_dim=self.controller_hidden_dim)
         self.read_head = ReadHead(self.memory_capacity, self.memory_vector_size)
         self.write_head = WriteHead(self.memory_capacity, self.memory_vector_size)
@@ -41,17 +75,17 @@ class NTM(object):
         self.zeros = tf.zeros(shape=(self.input_vector_size,), dtype=tf.float32, name='zeros')
         self.outputs = []
 
-        self.memories = []
-        self.a_t = []  # write encodings
+        self.memories = []  # the memory
         self.ww_t = []  # write locations
-        self.e_t = []  # write erase vectors
+        self.a_t = []  # write add terms
+        self.e_t = []  # write erase terms
 
         self.rw_t = []  # read locations
         self.r_t = []  # read vectors
 
         self._build_forward_graph()
 
-        # optimization stuff (one for each sequence step)
+        # optimization stuff
         self.opt_step = None
         self.loss = 0
         self._build_backward_graph()
@@ -59,8 +93,9 @@ class NTM(object):
         # session
         self.sess = tf.Session()
         self.sess.run(tf.global_variables_initializer())
+        self.global_step = 0
 
-        # summaries
+        # summaries stuff
         self.loss_summarization = None
         self.summarization = None
         self.train_writer = None
@@ -68,14 +103,16 @@ class NTM(object):
 
         self._make_summaries()
 
-        self.global_step = 0
-
         # print how many parameters are there
         all_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
         trainable_parameters = sum([np.prod([int(i) for i in v.get_shape()]) for v in all_variables])
         print('Model built. Total number of parameters: {:,}'.format(trainable_parameters))
 
     def _build_forward_graph(self):
+        """
+        Builds the forward computation graph.
+        It is made of many read/write cycles.
+        """
 
         print('[*] Building a Neural Turing Machine.')
 
@@ -106,23 +143,38 @@ class NTM(object):
             self._read_write(controller_out, reuse=True)
 
             reuse = None if t == 0 else True
-            self.outputs.append(self._decode_output(self.r_t[-1], reuse=reuse))
+            self.outputs.append(self._decode_read_vector(self.r_t[-1], reuse=reuse))
         print('Done.')
 
     def _build_backward_graph(self):
+        """
+        Builds the backward graph for optimization.
+        """
 
         print('[*] Building optimization problem.')
-        for t in range(0, self.sequence_length):
-            print_progress(float(t+1) / self.sequence_length)
+        with tf.variable_scope('optimization'):
+            for t in range(0, self.sequence_length):
+                print_progress(float(t+1) / self.sequence_length)
 
-            self.loss += self.bce(self.targets[t], self.outputs[t])
+                # loss is a binary crossentropy for each timestep
+                self.loss += self.bce(self.targets[t], self.outputs[t])
 
-        self.opt = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate)
-        g = self.opt.compute_gradients(self.loss)
-        clipped_g = [(tf.clip_by_value(grad, self.min_grad, self.max_grad), var) for grad, var in g]
-        self.opt_step = self.opt.apply_gradients(clipped_g)
+            self.opt = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate)
+            g = self.opt.compute_gradients(self.loss)
+            clipped_g = [(tf.clip_by_value(grad, self.min_grad, self.max_grad), var) for grad, var in g]
+            self.opt_step = self.opt.apply_gradients(clipped_g)
 
     def _read_write(self, controller_out, reuse):
+        """
+        Performs a single-step read/write cycle.
+        
+        Parameters
+        ----------
+        controller_out: Tensor
+            the output of the controller.
+        reuse:
+            whether or not to reuse variables. Either None or True.
+        """
 
         # read
         with tf.variable_scope('read', reuse=reuse):
@@ -131,7 +183,7 @@ class NTM(object):
 
         # write
         with tf.variable_scope('write', reuse=reuse):
-            self.a_t.append(self._encode_input(controller_out))
+            self.a_t.append(self.write_head.produce_add_vector(controller_out))
             self.ww_t.append(self.write_head.produce_address(controller_out, self.memories[-1]))
             self.e_t.append(self.write_head.produce_erase_vector(controller_out))
             memory_update = self.write_head.produce_memory_update(self.memories[-1],
@@ -140,21 +192,26 @@ class NTM(object):
                                                                   self.a_t[-1])
             self.memories.append(memory_update)
 
-    def _encode_input(self, I):
+    def _decode_read_vector(self, r_t, reuse):
+        """
+        Decodes the vector read from memory into 
+        an output token.
+        
+        Parameters
+        ----------
+        r_t: Tensor
+            the read vector.
+        reuse:
+            whether or not to reuse variables. Either None or True.
 
-        with tf.variable_scope('input_encoder'):
-            I = tf.expand_dims(I, axis=0)  # tf does not accept rank<2 for tf.layers.dense
-            a_t = tf.layers.dense(I, self.memory_vector_size, activation=tf.nn.tanh,
-                                  kernel_initializer=tf.random_normal_initializer(stddev=0.5),
-                                  bias_initializer=tf.random_normal_initializer(stddev=0.5))
-            a_t = tf.squeeze(a_t, axis=0)  # squeeze fake dimension
-
-        return a_t
-
-    def _decode_output(self, r_t, reuse):
+        Returns
+        -------
+        o_t: Tensor
+            the current output token.
+        """
 
         with tf.variable_scope('output_decoder', reuse=reuse):
-            r_t = tf.expand_dims(r_t, axis=0)  # tf does not accept rank<2 for tf.layers.dense
+            r_t = tf.expand_dims(r_t, axis=0)
             o_t = tf.layers.dense(r_t, self.input_vector_size, activation=tf.nn.sigmoid,
                                   kernel_initializer=tf.random_normal_initializer(stddev=0.5),
                                   bias_initializer=tf.random_normal_initializer(stddev=0.5))
@@ -163,6 +220,11 @@ class NTM(object):
         return o_t
 
     def _initalize_state(self):
+        """
+        Initializes the state of the NTM.
+        Turns out initialization is critic.
+        Lots of the manual tuning involved the next 5 lines of code.
+        """
 
         self.memories.append(tf.tanh(
             tf.random_normal(shape=(self.memory_capacity, self.memory_vector_size), stddev=0.5)))
@@ -172,11 +234,28 @@ class NTM(object):
 
     @staticmethod
     def bce(y_true, y_pred):
+        """
+        Binary crossentropy.
+        
+        Parameters
+        ----------
+        y_true: Tensor
+            groundtruth values.
+        y_pred: Tensor
+            predicted values.
 
+        Returns
+        -------
+        Tensor
+            the binary crossentropy.
+        """
         return tf.reduce_mean(-(y_true * tf.log(y_pred + np.finfo(float).eps) +
                                 (1 - y_true) * tf.log(1 - y_pred + np.finfo(float).eps)))
 
     def _make_summaries(self):
+        """
+        Function to build summary stuff.
+        """
 
         self.summaries['loss'] = tf.summary.scalar('loss', self.loss)
 
@@ -211,12 +290,28 @@ class NTM(object):
         self.loss_summarization = tf.summary.merge([self.summaries['loss']])
         self.summarization = tf.summary.merge_all()
 
-        logs_dir = join('logs', 'seq_len_{:02d}'.format(self.sequence_length))
+        logs_dir = join(self.logdir, 'seq_len_{:02d}'.format(self.sequence_length))
+
+        # make summary dir
         if not exists(logs_dir):
             os.makedirs(logs_dir)
         self.train_writer = tf.summary.FileWriter(logs_dir, self.sess.graph)
 
-    def train_on_sample(self, start, X, end, Y):
+    def train_on_sample(self, start_token, X, end_token, Y):
+        """
+        Function to train the NTM model on a single example.
+        
+        Parameters
+        ----------
+        start_token: ndarray
+            the start token.
+        X: ndarray
+            the sequence to be copied.
+        end_token: ndarray
+            the end token.
+        Y: ndarray
+            the groundtruth value.
+        """
 
         assert X.shape[0] == Y.shape[0] == self.sequence_length, 'dimension mismatch.'
 
@@ -226,8 +321,8 @@ class NTM(object):
         )
         feed_dict.update(
             {
-                self.start_token: start,
-                self.end_token: end
+                self.start_token: start_token,
+                self.end_token: end_token
             }
         )
 
@@ -255,3 +350,11 @@ class NTM(object):
                                           global_step=self.global_step)
 
         self.global_step += 1
+
+"""
+References
+----------
+[1] Graves, Alex, Greg Wayne, and Ivo Danihelka. 
+"Neural turing machines." arXiv preprint arXiv:1410.5401 (2014).
+[2] https://github.com/carpedm20/NTM-tensorflow/blob/master/ops.py
+"""
