@@ -90,8 +90,8 @@ class Head(object):
 
         with tf.variable_scope('content_addressing'):
             # compute norm of key and memory content
-            k_t_norm = tf.sqrt(tf.reduce_sum(tf.pow(self._k_t, 2)))
-            M_norm = tf.sqrt(tf.reduce_sum(tf.pow(M, 2), axis=1))
+            k_t_norm = 1#tf.sqrt(tf.reduce_sum(tf.pow(self._k_t, 2)))
+            M_norm = 1#tf.sqrt(tf.reduce_sum(tf.pow(M, 2), axis=1))
 
             # compute cosine similarity for each memory entry (Eq. (6))
             dot_product = tf.matmul(tf.expand_dims(self._k_t, axis=0), M, transpose_b=True)
