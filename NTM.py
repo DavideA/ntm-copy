@@ -18,8 +18,6 @@ class NTM(object):
         self.sequence_length = sequence_length
         self.controller_dim = controller_dim
 
-        self.memories = [tf.tanh(tf.random_normal(shape=(self.memory_capacity, self.memory_vector_size), stddev=0.5))]
-
         self.read_head = ReadHead(self.memory_capacity, self.memory_vector_size)
         self.write_head = WriteHead(self.memory_capacity, self.memory_vector_size)
 
@@ -35,12 +33,13 @@ class NTM(object):
         self.zeros = tf.zeros(shape=(self.input_vector_size,), dtype=tf.float32, name='zeros')
         self.outputs = []
 
-        self.a_t = [tf.zeros(shape=(self.memory_vector_size,), dtype=tf.float32)]  # write encodings
-        self.ww_t = [tf.nn.softmax(tf.range(self.memory_capacity, 0, -1, dtype=tf.float32))]  # write locations
-        self.e_t = [tf.zeros(shape=(self.memory_capacity,), dtype=tf.float32)]  # write erase vectors
+        self.memories = []
+        self.a_t = []  # write encodings
+        self.ww_t = []  # write locations
+        self.e_t = []  # write erase vectors
 
-        self.rw_t = [tf.nn.softmax(tf.range(self.memory_capacity, 0, -1, dtype=tf.float32))]  # read locations
-        self.r_t = [tf.tanh(tf.random_normal(shape=(self.memory_vector_size,), stddev=0.5))]  # read vectors
+        self.rw_t = []  # read locations
+        self.r_t = []  # read vectors
 
         self._build_graph()
 
@@ -63,9 +62,19 @@ class NTM(object):
 
         self.global_step = 0
 
+    def _initalize_state(self):
+
+        self.memories.append(tf.tanh(
+            tf.random_normal(shape=(self.memory_capacity, self.memory_vector_size), stddev=0.5)))
+        self.ww_t.append(tf.nn.softmax(tf.range(self.memory_capacity, 0, -1, dtype=tf.float32)))
+        self.rw_t.append(tf.nn.softmax(tf.range(self.memory_capacity, 0, -1, dtype=tf.float32)))
+        self.r_t.append(tf.tanh(tf.random_normal(shape=(self.memory_vector_size,), stddev=0.5)))
+
     def _build_graph(self):
 
         print('[*] Building a Neural Turing Machine.')
+
+        self._initalize_state()
 
         # present start token
         controller_out = self._controller(self.start_token, self.r_t[0], reuse=None)
@@ -201,7 +210,7 @@ class NTM(object):
         self.loss_summarization = tf.summary.merge([self.summaries['loss']])
         self.summarization = tf.summary.merge_all()
 
-        logs_dir = join('logs', 'seq_{:02d}'.format(self.sequence_length))
+        logs_dir = join('logs', 'seq_len_{:02d}'.format(self.sequence_length))
         if not exists(logs_dir):
             os.makedirs(logs_dir)
         self.train_writer = tf.summary.FileWriter(logs_dir, self.sess.graph)
@@ -231,31 +240,20 @@ class NTM(object):
             'memory': self.memories,
             'loss': self.loss,
             'opt_step': self.opt_step,
+            'loss_summarization': self.loss_summarization
         }
 
         res = self.sess.run(fetches=fetches, feed_dict=feed_dict)
 
-        self.global_step += 1
-
-        loss = res['loss']
-        a_t = np.stack(res['a_t'], axis=0)
-        ww_t = np.stack(res['ww_t'], axis=0)
-        e_t = np.stack(res['e_t'], axis=0)
-        rw_t = np.stack(res['rw_t'], axis=0)
-        r_t = np.stack(res['r_t'], axis=0)
-        out = np.stack(res['output'], axis=0)
-        memory = res['memory']
-
         # write summary for loss
-        self.train_writer.add_summary(self.sess.run(self.loss_summarization, feed_dict=feed_dict),
-                                      global_step=self.global_step)
+        self.train_writer.add_summary(res['loss_summarization'], global_step=self.global_step)
 
         # write summary for images
         if self.global_step % 200 == 0:
             self.train_writer.add_summary(self.sess.run(self.summarization, feed_dict=feed_dict),
                                           global_step=self.global_step)
 
-        return loss, a_t, ww_t, e_t, rw_t, r_t, out, memory
+        self.global_step += 1
 
 
 if __name__ == '__main__':

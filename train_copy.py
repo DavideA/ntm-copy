@@ -5,7 +5,7 @@ plt.ion()
 
 from NTM import NTM
 
-sequence_length = 4
+sequence_length = 3
 token_size = 10
 
 
