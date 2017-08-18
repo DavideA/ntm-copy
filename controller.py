@@ -29,7 +29,9 @@ class Controller(object):
 
         with tf.variable_scope('k_t_emitter'):
             X = tf.expand_dims(X, axis=0)
-            k_t = tf.layers.dense(X, self.memory_vector_size, activation=tf.nn.sigmoid)
+            k_t = tf.layers.dense(X, self.memory_vector_size, activation=tf.nn.tanh,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                  bias_initializer=tf.random_normal_initializer(stddev=0.5))
             k_t = tf.squeeze(k_t, axis=0)
 
         return k_t
@@ -38,7 +40,9 @@ class Controller(object):
 
         with tf.variable_scope('beta_t_emitter'):
             X = tf.expand_dims(X, axis=0)
-            beta_t = tf.layers.dense(X, 1, activation=tf.nn.softplus)
+            beta_t = tf.layers.dense(X, 1, activation=tf.nn.softplus,
+                                     kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                     bias_initializer=tf.random_normal_initializer(stddev=0.5))
             beta_t = tf.squeeze(beta_t, axis=0)
 
         return beta_t
@@ -47,7 +51,9 @@ class Controller(object):
 
         with tf.variable_scope('g_t_emitter'):
             X = tf.expand_dims(X, axis=0)
-            g_t = tf.layers.dense(X, 1, activation=tf.nn.sigmoid)
+            g_t = tf.layers.dense(X, 1, activation=tf.nn.sigmoid,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                  bias_initializer=tf.random_normal_initializer(stddev=0.5))
             g_t = tf.squeeze(g_t, axis=0)
 
         return g_t
@@ -56,7 +62,9 @@ class Controller(object):
 
         with tf.variable_scope('s_t_emitter'):
             X = tf.expand_dims(X, axis=0)
-            s_t = tf.layers.dense(X, self.max_shift, activation=tf.nn.softmax)
+            s_t = tf.layers.dense(X, self.max_shift, activation=tf.nn.softmax,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                  bias_initializer=tf.random_normal_initializer(stddev=0.5))
             s_t = tf.squeeze(s_t, axis=0)
 
         return s_t
@@ -65,7 +73,9 @@ class Controller(object):
 
         with tf.variable_scope('gamma_t_emitter'):
             X = tf.expand_dims(X, axis=0)
-            gamma_t = tf.layers.dense(X, 1, activation=tf.nn.softplus)
+            gamma_t = tf.layers.dense(X, 1, activation=tf.nn.softplus,
+                                      kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                      bias_initializer=tf.random_normal_initializer(stddev=0.5))
             gamma_t = tf.add(gamma_t, tf.constant(1.0))
             gamma_t = tf.squeeze(gamma_t, axis=0)
 

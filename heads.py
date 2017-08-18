@@ -11,7 +11,7 @@ class Head(object):
         self._memory_capacity = memory_capacity
         self._memory_vector_size = memory_vector_size
 
-        self._controller = Controller(self._memory_capacity, self._memory_vector_size)
+        self._controller = Controller(self._memory_capacity, self._memory_vector_size, max_shift=3)
 
         # addressing emissions
         self._k_t = None
@@ -21,10 +21,7 @@ class Head(object):
         self._gamma_t = None
 
         # addresses
-        self._w_last = tf.Variable(initial_value=tf.ones(shape=(self._memory_capacity,),
-                                                         dtype=tf.float32,
-                                                         name='w_last') / self._memory_capacity,
-                                   trainable=False)
+        self._w_last = [tf.zeros(shape=(self._memory_capacity,), dtype=tf.float32)]
 
     def produce_address(self, X, M):
 
@@ -38,6 +35,8 @@ class Head(object):
             w_tilde_t = self._convolutional_shift(wg_t)
             w_t = self._sharpening(w_tilde_t)
 
+        self._w_last.append(w_t)
+
         return w_t
 
     def _content_addressing(self, M):
@@ -47,7 +46,7 @@ class Head(object):
         with tf.variable_scope('content_addressing'):
             # compute norm of key and memory content
             k_t_norm = 1#tf.sqrt(tf.reduce_sum(tf.pow(self._k_t, 2)))
-            M_norm = tf.sqrt(tf.reduce_sum(tf.pow(M, 2), axis=1))
+            M_norm = 1#tf.sqrt(tf.reduce_sum(tf.pow(M, 2), axis=1))
 
             # compute cosine similarity for each memory entry (Eq. (6))
             dot_product = tf.matmul(tf.expand_dims(self._k_t, axis=0), M, transpose_b=True)
@@ -65,7 +64,7 @@ class Head(object):
 
         with tf.variable_scope('interpolation'):
             # apply interpolation gate (Eq. (7))
-            wg_t = self._g_t * wc_t + (1 - self._g_t) * self._w_last
+            wg_t = self._g_t * wc_t + (1 - self._g_t) * self._w_last[-1]
 
         return wg_t
 
@@ -91,9 +90,6 @@ class Head(object):
             w_t = elevated / tf.reduce_sum(elevated)
 
         return w_t
-
-    def _update_w_last(self, w_t):
-        self._w_last = tf.assign(self._w_last, w_t)
 
     @staticmethod
     def _circular_convolution(v, k):
@@ -125,10 +121,6 @@ class Head(object):
 
         return tf.dynamic_stitch([i for i in xrange(size)], kernels)
 
-    def reset(self):
-        self._w_last = tf.assign(self._w_last,
-                                 tf.ones(shape=(self._memory_capacity,), dtype=tf.float32) / self._memory_capacity)
-
 
 class ReadHead(Head):
 
@@ -136,8 +128,6 @@ class ReadHead(Head):
         super(ReadHead, self).__init__(memory_capacity, memory_vector_size)
 
     def read(self, M, w_t):
-
-        self._update_w_last(w_t)
 
         w_t = tf.expand_dims(w_t, axis=0)
         r_t = tf.matmul(w_t, M)
@@ -153,8 +143,6 @@ class WriteHead(Head):
 
     def produce_memory_update(self, M, w_t, e_t, a_t):
 
-        self._update_w_last(w_t)
-
         # update M
         M_tilde_t = M * (1 - tf.expand_dims(e_t, axis=-1))
 
@@ -168,7 +156,9 @@ class WriteHead(Head):
 
         with tf.variable_scope('eraser'):
             X = tf.expand_dims(X, axis=0)
-            e_t = tf.layers.dense(X, self._memory_capacity, activation=tf.nn.sigmoid)
+            e_t = tf.layers.dense(X, self._memory_capacity, activation=tf.nn.sigmoid,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                  bias_initializer=tf.random_normal_initializer(stddev=0.5))
             e_t = tf.squeeze(e_t, axis=0)
 
         return e_t
