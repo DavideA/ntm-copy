@@ -1,4 +1,6 @@
 .idea
 *.pyc
 logs
+*.png
+*.pdf
 
