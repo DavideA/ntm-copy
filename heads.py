@@ -1,17 +1,15 @@
 import numpy as np
 import tensorflow as tf
 import math
-from controller import Controller
 
 
 class Head(object):
 
-    def __init__(self, memory_capacity, memory_vector_size):
+    def __init__(self, memory_capacity, memory_vector_size, max_shift=3):
 
         self._memory_capacity = memory_capacity
         self._memory_vector_size = memory_vector_size
-
-        self._controller = Controller(self._memory_capacity, self._memory_vector_size, max_shift=3)
+        self._max_shift = max_shift
 
         # addressing emissions
         self._k_t = None
@@ -26,7 +24,7 @@ class Head(object):
     def produce_address(self, X, M):
 
         # emit controller parameters for addressing
-        self._k_t, self._beta_t, self._g_t, self._s_t, self._gamma_t = self._controller.emit_heads_parameters(X)
+        self._k_t, self._beta_t, self._g_t, self._s_t, self._gamma_t = self._emit_heads_parameters(X)
 
         with tf.variable_scope('addressing_mechanism'):
             # flow of addressing mechanism
@@ -45,8 +43,8 @@ class Head(object):
 
         with tf.variable_scope('content_addressing'):
             # compute norm of key and memory content
-            k_t_norm = 1#tf.sqrt(tf.reduce_sum(tf.pow(self._k_t, 2)))
-            M_norm = 1#tf.sqrt(tf.reduce_sum(tf.pow(M, 2), axis=1))
+            k_t_norm = tf.sqrt(tf.reduce_sum(tf.pow(self._k_t, 2)))
+            M_norm = tf.sqrt(tf.reduce_sum(tf.pow(M, 2), axis=1))
 
             # compute cosine similarity for each memory entry (Eq. (6))
             dot_product = tf.matmul(tf.expand_dims(self._k_t, axis=0), M, transpose_b=True)
@@ -121,13 +119,85 @@ class Head(object):
 
         return tf.dynamic_stitch([i for i in xrange(size)], kernels)
 
+    def _emit_heads_parameters(self, X):
+
+        with tf.variable_scope('head_parameters'):
+
+            k_t = self._emit_k_t(X)
+            beta_t = self._emit_beta_t(X)
+            g_t = self._emit_g_t(X)
+            s_t = self._emit_s_t(X)
+            gamma_y = self._emit_gamma_t(X)
+
+        return k_t, beta_t, g_t, s_t, gamma_y
+
+    def _emit_k_t(self, X):
+
+        with tf.variable_scope('k_t_emitter'):
+            X = tf.expand_dims(X, axis=0)
+            k_t = tf.layers.dense(X, self._memory_vector_size, activation=tf.nn.tanh,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                  bias_initializer=tf.random_normal_initializer(stddev=0.5))
+            k_t = tf.squeeze(k_t, axis=0)
+
+        return k_t
+
+    @staticmethod
+    def _emit_beta_t(X):
+
+        with tf.variable_scope('beta_t_emitter'):
+            X = tf.expand_dims(X, axis=0)
+            beta_t = tf.layers.dense(X, 1, activation=tf.nn.softplus,
+                                     kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                     bias_initializer=tf.random_normal_initializer(stddev=0.5))
+            beta_t = tf.squeeze(beta_t, axis=0)
+
+        return beta_t
+
+    @staticmethod
+    def _emit_g_t(X):
+
+        with tf.variable_scope('g_t_emitter'):
+            X = tf.expand_dims(X, axis=0)
+            g_t = tf.layers.dense(X, 1, activation=tf.nn.sigmoid,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                  bias_initializer=tf.random_normal_initializer(stddev=0.5))
+            g_t = tf.squeeze(g_t, axis=0)
+
+        return g_t
+
+    def _emit_s_t(self, X):
+
+        with tf.variable_scope('s_t_emitter'):
+            X = tf.expand_dims(X, axis=0)
+            s_t = tf.layers.dense(X, self._max_shift, activation=tf.nn.softmax,
+                                  kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                  bias_initializer=tf.random_normal_initializer(stddev=0.5))
+            s_t = tf.squeeze(s_t, axis=0)
+
+        return s_t
+
+    @staticmethod
+    def _emit_gamma_t(X):
+
+        with tf.variable_scope('gamma_t_emitter'):
+            X = tf.expand_dims(X, axis=0)
+            gamma_t = tf.layers.dense(X, 1, activation=tf.nn.softplus,
+                                      kernel_initializer=tf.random_normal_initializer(stddev=0.5),
+                                      bias_initializer=tf.random_normal_initializer(stddev=0.5))
+            gamma_t = tf.add(gamma_t, tf.constant(1.0))
+            gamma_t = tf.squeeze(gamma_t, axis=0)
+
+        return gamma_t
+
 
 class ReadHead(Head):
 
     def __init__(self, memory_capacity, memory_vector_size):
         super(ReadHead, self).__init__(memory_capacity, memory_vector_size)
 
-    def read(self, M, w_t):
+    @staticmethod
+    def read(M, w_t):
 
         w_t = tf.expand_dims(w_t, axis=0)
         r_t = tf.matmul(w_t, M)

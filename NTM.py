@@ -3,6 +3,7 @@ import tensorflow as tf
 from os.path import join, exists
 import os
 
+from controller import Controller
 from heads import ReadHead, WriteHead
 from utils import print_progress
 
@@ -10,24 +11,31 @@ from utils import print_progress
 class NTM(object):
 
     def __init__(self, memory_capacity, memory_vector_size, input_vector_size, sequence_length,
-                 controller_dim=100):
+                 controller_out_dim, controller_hidden_dim, learning_rate,
+                 min_grad, max_grad):
 
         self.memory_capacity = memory_capacity
         self.memory_vector_size = memory_vector_size
         self.input_vector_size = input_vector_size
         self.sequence_length = sequence_length
-        self.controller_dim = controller_dim
+        self.controller_out_dim = controller_out_dim
+        self.controller_hidden_dim = controller_hidden_dim
+        self.learning_rate = learning_rate
+        self.min_grad = min_grad
+        self.max_grad = max_grad
 
+        # controller and heads
+        self.controller = Controller(output_dim=self.controller_out_dim, hidden_dim=self.controller_hidden_dim)
         self.read_head = ReadHead(self.memory_capacity, self.memory_vector_size)
         self.write_head = WriteHead(self.memory_capacity, self.memory_vector_size)
 
         # graph (one placeholder/tensor for each sequence step)
         self.inputs = [tf.placeholder(shape=(self.input_vector_size,),
                                       dtype=tf.float32,
-                                      name='input_vector_{:03d}'.format(i)) for i in range(0, self.sequence_length)]
+                                      name='input_vector_{:03d}'.format(t)) for t in range(0, self.sequence_length)]
         self.targets = [tf.placeholder(shape=(self.input_vector_size,),
                                        dtype=tf.float32,
-                                       name='target_vector_{:03d}'.format(i)) for i in range(0, self.sequence_length)]
+                                       name='target_vector_{:03d}'.format(t)) for t in range(0, self.sequence_length)]
         self.start_token = tf.placeholder(shape=(self.input_vector_size,), dtype=tf.float32, name='start_token')
         self.end_token = tf.placeholder(shape=(self.input_vector_size,), dtype=tf.float32, name='end_token')
         self.zeros = tf.zeros(shape=(self.input_vector_size,), dtype=tf.float32, name='zeros')
@@ -41,12 +49,12 @@ class NTM(object):
         self.rw_t = []  # read locations
         self.r_t = []  # read vectors
 
-        self._build_graph()
+        self._build_forward_graph()
 
         # optimization stuff (one for each sequence step)
         self.opt_step = None
         self.loss = 0
-        self._build_optimization()
+        self._build_backward_graph()
 
         # session
         self.sess = tf.Session()
@@ -62,60 +70,57 @@ class NTM(object):
 
         self.global_step = 0
 
-    def _initalize_state(self):
+        # print how many parameters are there
+        all_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+        trainable_parameters = sum([np.prod([int(i) for i in v.get_shape()]) for v in all_variables])
+        print('Model built. Total number of parameters: {:,}'.format(trainable_parameters))
 
-        self.memories.append(tf.tanh(
-            tf.random_normal(shape=(self.memory_capacity, self.memory_vector_size), stddev=0.5)))
-        self.ww_t.append(tf.nn.softmax(tf.range(self.memory_capacity, 0, -1, dtype=tf.float32)))
-        self.rw_t.append(tf.nn.softmax(tf.range(self.memory_capacity, 0, -1, dtype=tf.float32)))
-        self.r_t.append(tf.tanh(tf.random_normal(shape=(self.memory_vector_size,), stddev=0.5)))
-
-    def _build_graph(self):
+    def _build_forward_graph(self):
 
         print('[*] Building a Neural Turing Machine.')
 
         self._initalize_state()
 
         # present start token
-        controller_out = self._controller(self.start_token, self.r_t[0], reuse=None)
+        controller_out = self.controller.emit_feature_vector(self.start_token, self.r_t[0], reuse=None)
         self._read_write(controller_out, reuse=None)
 
         # present inputs
         print('Input chain: ')
-        for i in range(0, self.sequence_length):
-            print_progress(float(i+1) / self.sequence_length)
+        for t in range(0, self.sequence_length):
+            print_progress(float(t + 1) / self.sequence_length)
 
-            controller_out = self._controller(self.inputs[i], self.r_t[-1], reuse=True)
+            controller_out = self.controller.emit_feature_vector(self.inputs[t], self.r_t[-1], reuse=True)
             self._read_write(controller_out, reuse=True)
 
         # present end token
-        controller_out = self._controller(self.end_token, self.r_t[-1], reuse=True)
+        controller_out = self.controller.emit_feature_vector(self.end_token, self.r_t[-1], reuse=True)
         self._read_write(controller_out, reuse=True)
 
         # present outputs
         print('Output chain: ')
-        for i in range(0, self.sequence_length):
-            print_progress(float(i + 1) / self.sequence_length)
+        for t in range(0, self.sequence_length):
+            print_progress(float(t + 1) / self.sequence_length)
 
-            controller_out = self._controller(self.zeros, self.r_t[-1], reuse=True)
+            controller_out = self.controller.emit_feature_vector(self.zeros, self.r_t[-1], reuse=True)
             self._read_write(controller_out, reuse=True)
 
-            reuse = None if i == 0 else True
+            reuse = None if t == 0 else True
             self.outputs.append(self._decode_output(self.r_t[-1], reuse=reuse))
         print('Done.')
 
-    def _controller(self, cur_input, last_read, reuse):
+    def _build_backward_graph(self):
 
-        with tf.variable_scope('controller', reuse=reuse):
-            cat = tf.concat([cur_input, last_read], axis=0)
-            controller_h = tf.layers.dense(tf.expand_dims(cat, axis=0), units=256, activation=tf.nn.sigmoid,
-                                           kernel_initializer=tf.random_normal_initializer(stddev=0.5),
-                                           bias_initializer=tf.random_normal_initializer(stddev=0.5))
-            controller_out = tf.layers.dense(controller_h, units=self.controller_dim, activation=tf.nn.sigmoid,
-                                             kernel_initializer=tf.random_normal_initializer(stddev=0.5),
-                                             bias_initializer=tf.random_normal_initializer(stddev=0.5))
+        print('[*] Building optimization problem.')
+        for t in range(0, self.sequence_length):
+            print_progress(float(t+1) / self.sequence_length)
 
-        return tf.squeeze(controller_out, axis=0)
+            self.loss += self.bce(self.targets[t], self.outputs[t])
+
+        self.opt = tf.train.RMSPropOptimizer(learning_rate=self.learning_rate)
+        g = self.opt.compute_gradients(self.loss)
+        clipped_g = [(tf.clip_by_value(grad, self.min_grad, self.max_grad), var) for grad, var in g]
+        self.opt_step = self.opt.apply_gradients(clipped_g)
 
     def _read_write(self, controller_out, reuse):
 
@@ -134,20 +139,6 @@ class NTM(object):
                                                                   self.e_t[-1],
                                                                   self.a_t[-1])
             self.memories.append(memory_update)
-
-    def _build_optimization(self):
-
-        print('[*] Building optimization problem.')
-        for i in range(0, self.sequence_length):
-            print_progress(float(i+1) / self.sequence_length)
-
-            self.loss += self.bce(self.targets[i], self.outputs[i])
-
-        self.opt = tf.train.RMSPropOptimizer(learning_rate=1e-4)
-        # self.opt_step = self.opt.minimize(self.loss)
-        gvs = self.opt.compute_gradients(self.loss)
-        capped_gvs = [(tf.clip_by_value(grad, -10., 10.), var) for grad, var in gvs]
-        self.opt_step = self.opt.apply_gradients(capped_gvs)
 
     def _encode_input(self, I):
 
@@ -171,9 +162,19 @@ class NTM(object):
 
         return o_t
 
-    def bce(self, y_true, y_pred):
+    def _initalize_state(self):
 
-        return tf.reduce_mean(-(y_true * tf.log(y_pred + np.finfo(float).eps) + (1 - y_true) * tf.log(1 - y_pred + np.finfo(float).eps)))
+        self.memories.append(tf.tanh(
+            tf.random_normal(shape=(self.memory_capacity, self.memory_vector_size), stddev=0.5)))
+        self.ww_t.append(tf.nn.softmax(tf.range(self.memory_capacity, 0, -1, dtype=tf.float32)))
+        self.rw_t.append(tf.nn.softmax(tf.range(self.memory_capacity, 0, -1, dtype=tf.float32)))
+        self.r_t.append(tf.tanh(tf.random_normal(shape=(self.memory_vector_size,), stddev=0.5)))
+
+    @staticmethod
+    def bce(y_true, y_pred):
+
+        return tf.reduce_mean(-(y_true * tf.log(y_pred + np.finfo(float).eps) +
+                                (1 - y_true) * tf.log(1 - y_pred + np.finfo(float).eps)))
 
     def _make_summaries(self):
 
@@ -254,15 +255,3 @@ class NTM(object):
                                           global_step=self.global_step)
 
         self.global_step += 1
-
-
-if __name__ == '__main__':
-
-    model = NTM(512, 256, 10, 3)
-
-    all_variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-    print(all_variables)
-
-    import numpy as np
-    trainable_parameters = sum([np.prod([int(i) for i in v.get_shape()]) for v in all_variables])
-    print('Total number of parameters: {:,}'.format(trainable_parameters))
