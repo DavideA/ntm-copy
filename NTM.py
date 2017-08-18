@@ -1,5 +1,6 @@
+import numpy as np
 import tensorflow as tf
-from os.path import exists
+from os.path import join, exists
 import os
 
 from heads import ReadHead, WriteHead
@@ -56,26 +57,9 @@ class NTM(object):
         self.loss_summarization = None
         self.summarization = None
         self.train_writer = None
-
         self.summaries = dict()
-        self.summaries['loss'] = tf.summary.scalar('loss', self.loss)
-        self.summaries['inputs'] = tf.summary.image('inputs', tf.expand_dims(tf.expand_dims(tf.stack(self.inputs, axis=-1), axis=0), axis=-1))
-        self.summaries['targets'] = tf.summary.image('targets', tf.expand_dims(tf.expand_dims(tf.stack(self.targets, axis=-1), axis=0), axis=-1))
-        self.summaries['outputs'] = tf.summary.image('outputs', tf.expand_dims(tf.expand_dims(tf.stack(self.outputs, axis=-1), axis=0), axis=-1))
-        self.summaries['memory'] = tf.summary.image('memory', tf.expand_dims(tf.expand_dims(self.memories[-1], axis=0), axis=-1))
-        self.summaries['a_t'] = tf.summary.image('a_t', tf.expand_dims(tf.expand_dims(tf.stack(self.a_t, axis=-1), axis=0), axis=-1))
-        self.summaries['ww_t'] = tf.summary.image('ww_t', tf.expand_dims(tf.expand_dims(tf.stack(self.ww_t, axis=-1), axis=0), axis=-1))
-        self.summaries['e_t'] = tf.summary.image('e_t', tf.expand_dims(tf.expand_dims(tf.stack(self.e_t, axis=-1), axis=0), axis=-1))
-        self.summaries['rw_t'] = tf.summary.image('rw_t', tf.expand_dims(tf.expand_dims(tf.stack(self.rw_t, axis=-1), axis=0), axis=-1))
-        self.summaries['r_t'] = tf.summary.image('r_t', tf.expand_dims(tf.expand_dims(tf.stack(self.r_t, axis=-1), axis=0), axis=-1))
 
-        self.loss_summarization = tf.summary.merge([self.summaries['loss']])
-        self.summarization = tf.summary.merge_all()
-
-        logs_dir = 'logs_seq_{:02d}'.format(self.sequence_length)
-        if not exists(logs_dir):
-            os.makedirs(logs_dir)
-        self.train_writer = tf.summary.FileWriter(logs_dir, self.sess.graph)
+        self._make_summaries()
 
         self.global_step = 0
 
@@ -181,6 +165,46 @@ class NTM(object):
     def bce(self, y_true, y_pred):
 
         return tf.reduce_mean(-(y_true * tf.log(y_pred + np.finfo(float).eps) + (1 - y_true) * tf.log(1 - y_pred + np.finfo(float).eps)))
+
+    def _make_summaries(self):
+
+        self.summaries['loss'] = tf.summary.scalar('loss', self.loss)
+
+        self.summaries['0_inputs_outputs'] = \
+            tf.summary.image('0_inputs_outputs', tf.concat([
+                tf.expand_dims(tf.expand_dims(tf.stack(self.inputs, axis=-1), axis=0), axis=-1),
+                tf.ones(shape=(1, self.input_vector_size, 1, 1)),  # white separator
+                tf.expand_dims(tf.expand_dims(tf.stack(self.outputs, axis=-1), axis=0), axis=-1)],
+                axis=2))
+
+        self.summaries['1_write_and_read_locations'] = \
+            tf.summary.image('1_write_and_read_locations', tf.concat([
+                tf.expand_dims(tf.expand_dims(tf.stack(self.ww_t, axis=-1), axis=0), axis=-1),
+                tf.ones(shape=(1, self.memory_capacity, 1, 1)),  # white separator
+                tf.expand_dims(tf.expand_dims(tf.stack(self.rw_t, axis=-1), axis=0), axis=-1)],
+                axis=2))
+
+        self.summaries['2_memory'] = \
+            tf.summary.image('2_memory', tf.expand_dims(tf.expand_dims(self.memories[-1], axis=0), axis=-1))
+
+        self.summaries['3_add_read_vectors'] = \
+            tf.summary.image('3_add_read_vectors', tf.concat([
+                tf.expand_dims(tf.expand_dims(tf.stack(self.a_t, axis=-1), axis=0), axis=-1),
+                tf.ones(shape=(1, self.memory_vector_size, 1, 1)),  # white separator
+                tf.expand_dims(tf.expand_dims(tf.stack(self.r_t, axis=-1), axis=0), axis=-1)],
+                axis=2))
+
+        self.summaries['4_erase_vectors'] = \
+            tf.summary.image('4_erase_vectors',
+                             tf.expand_dims(tf.expand_dims(tf.stack(self.e_t, axis=-1), axis=0), axis=-1))
+
+        self.loss_summarization = tf.summary.merge([self.summaries['loss']])
+        self.summarization = tf.summary.merge_all()
+
+        logs_dir = join('logs', 'seq_{:02d}'.format(self.sequence_length))
+        if not exists(logs_dir):
+            os.makedirs(logs_dir)
+        self.train_writer = tf.summary.FileWriter(logs_dir, self.sess.graph)
 
     def train_on_sample(self, start, X, end, Y):
 
