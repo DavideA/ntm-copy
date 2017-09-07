@@ -44,4 +44,14 @@ optional arguments:
 
 During learning, you can monitor loss and other stuff with tensorboard:
 ##### loss
-![alt text](/img/loss "Loss value")
+![](img/loss.png "Loss value")
+##### input and output sequences
+Is your copy good?
+
+![](img/input_output.png "Input and outputs")
+##### writing and reading addresses
+![](img/addresses.png "Write and read addresses")
+##### current memory snapshot
+you can clearly see the part of memory where information is stored.
+
+![](img/memory.png "Memory")
