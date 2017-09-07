@@ -55,3 +55,6 @@ Is your copy good?
 you can clearly see the part of memory where information is stored.
 
 ![](img/memory.png "Memory")
+
+### Known issues
+* During training very rarely loss goes to nan. This seems to be a [known issue in NTM training](https://github.com/carpedm20/NTM-tensorflow/issues/2). 
