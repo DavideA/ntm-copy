@@ -3,7 +3,7 @@ Yet another Tensorflow Neural Turing Machine.
 
 ### Why?
 I implemented it from scratch after reading the paper 
-just for the sake of study and coding practise. 
+just for the sake of study and coding practice. 
 Having a terrible time training it, I peeked into
 [this famous repo](https://github.com/carpedm20/NTM-tensorflow) to
 get some insights every once in a while.
