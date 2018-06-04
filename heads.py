@@ -200,12 +200,12 @@ class Head(object):
                 return idx
 
         kernels = []
-        for i in xrange(size):
-            indices = [loop(i + j) for j in xrange(kernel_shift, -kernel_shift - 1, -1)]
+        for i in range(size):
+            indices = [loop(i + j) for j in range(kernel_shift, -kernel_shift - 1, -1)]
             v_ = tf.gather(v, indices)
             kernels.append(tf.reduce_sum(v_ * k, 0))
 
-        return tf.dynamic_stitch([i for i in xrange(size)], kernels)
+        return tf.dynamic_stitch([i for i in range(size)], kernels)
 
     def _emit_heads_parameters(self, controller_out):
         """
